@@ -1,0 +1,27 @@
+{
+    "FileVersion": 3,
+    "Version": 1,
+    "VersionName": "1.0",
+    "FriendlyName": "Android Performance",
+    "Description": "This plugin is change graphic quality base on Android device temperature.",
+    "Category": "Other",
+    "CreatedBy": "Google",
+    "CreatedByURL": "https://developer.android.com/games/optimize/adpf",
+    "DocsURL": "",
+    "MarketplaceURL": "",
+    "SupportURL": "",
+    "CanContainContent": true,
+    "IsBetaVersion": false,
+    "IsExperimentalVersion": false,
+    "Installed": true,
+    "Modules": [
+        {
+            "Name": "AndroidPerformance",
+            "Type": "Runtime",
+            "LoadingPhase": "Default",
+            "WhitelistPlatforms": [
+                "Android"
+            ]
+        }
+    ]
+}
