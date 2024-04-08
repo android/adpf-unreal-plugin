@@ -28,9 +28,8 @@
 static TAutoConsoleVariable<int32> CVarAndroidPerformanceEnabled(
     TEXT("r.AndroidPerformanceEnabled"),
     1,
-    TEXT("Enable/Disable Android Performance plugin on the Monitor().\n")
-    TEXT("The plugin uses Android adaptability API to adjust the game setting based on the thermal status of the device, and CPU boost when it needs.\n")
-    TEXT("It is not disable features, it just not using Android adaptability during game play.\n")
+    TEXT("Enable/disable the Android Performance plugin in the Monitor() method.\n")
+    TEXT("The plugin uses the Android adaptability API to adjust the game settings based on the thermal status of the device and will adjust the CPU as needed.\n")
     TEXT(" 0: off (disabled)\n")
     TEXT(" 1: on (enabled)"),
     ECVF_RenderThreadSafe);
@@ -38,8 +37,8 @@ static TAutoConsoleVariable<int32> CVarAndroidPerformanceEnabled(
 static TAutoConsoleVariable<int32> CVarAndroidPerformanceHintEnabled(
     TEXT("r.AndroidPerformanceHintEnabled"),
     1,
-    TEXT("Enable/Disable performance hint manager on the Monitor(), the setting is recommended to enable for better thread boosting in supporting Android devices.\n")
-    TEXT("It is not disable features, it just not using it during game play.\n")
+    TEXT("Enable/disable the performance hint manager in the Monitor() method.\n")
+    TEXT("Enable this setting for optimal thread boosting on supported Android devices.\n")
     TEXT(" 0: off (disabled)\n")
     TEXT(" 1: on (enabled)"),
     ECVF_RenderThreadSafe);
@@ -47,10 +46,10 @@ static TAutoConsoleVariable<int32> CVarAndroidPerformanceHintEnabled(
 static TAutoConsoleVariable<int32> CVarAndroidPerformanceChangeQualites(
     TEXT("r.AndroidPerformanceChangeQualities"),
     1,
-    TEXT("Decide how to changed graphic qualities.\n")
-    TEXT(" 0: not changed qualities\n")
-    TEXT(" 1: changed by thermal headroom")
-    TEXT(" 2: changed by thermal listener"),
+    TEXT("Choose how the thermal status adjusts the game's fidelity level.\n")
+    TEXT(" 0: The system does not adjust any settings\n")
+    TEXT(" 1: Settings are adjusted according to the thermal headroom\n")
+    TEXT(" 2: Settings are adjusted according to the thermal listener"),
     ECVF_RenderThreadSafe);
 
 // Native callback for thermal status change listener.
