@@ -338,6 +338,12 @@ bool ADPFManager::InitializePowerManager() {
         env->DeleteLocalRef(obj_power_service);
         env->DeleteLocalRef(str_svc);
         env->DeleteLocalRef(context);
+
+        // Remove exception
+        if(env->ExceptionCheck()) {
+            env->ExceptionDescribe();
+            env->ExceptionClear();
+        }
     }
 #endif
 
@@ -388,6 +394,14 @@ bool ADPFManager::InitializePerformanceHintManager() {
         // Get the value of a constant
         jfieldID fid = env->GetStaticFieldID(context, "PERFORMANCE_HINT_SERVICE",
                                              "Ljava/lang/String;");
+        if(!fid) {
+            // Remove exception
+            if(env->ExceptionCheck()) {
+                env->ExceptionDescribe();
+                env->ExceptionClear();
+            }
+            return false;
+        }
         jobject str_svc = env->GetStaticObjectField(context, fid);
 
         // Get the method 'getSystemService' and call it
@@ -477,6 +491,12 @@ PRAGMA_ENABLE_DEPRECATION_WARNINGS
         env->DeleteLocalRef(obj_perfhint_service);
         env->DeleteLocalRef(str_svc);
         env->DeleteLocalRef(context);
+
+        // Remove exception
+        if(env->ExceptionCheck()) {
+            env->ExceptionDescribe();
+            env->ExceptionClear();
+        }
     }
 #endif
 
