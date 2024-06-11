@@ -65,24 +65,6 @@ void thermal_callback(void *data, AThermalStatus status) {
     ADPFManager::getInstance().SetThermalStatus(status);
 }
 
-void nativeRegisterThermalStatusListener(JNIEnv *env, jclass cls) {
-    auto manager = ADPFManager::getInstance().GetThermalManager();
-    if (manager != nullptr) {
-        auto ret = AThermal_registerThermalStatusListener(manager, thermal_callback,
-                                                          nullptr);
-        UE_LOG(LogAndroidPerformance, Log, TEXT("Thermal Status callback registerred:%d"), ret);
-    }
-}
-
-void nativeUnregisterThermalStatusListener(JNIEnv *env, jclass cls) {
-    auto manager = ADPFManager::getInstance().GetThermalManager();
-    if (manager != nullptr) {
-        auto ret = AThermal_unregisterThermalStatusListener(
-                manager, thermal_callback, nullptr);
-        UE_LOG(LogAndroidPerformance, Log, TEXT("Thermal Status callback unregisterred:%d"), ret);
-    }
-}
-
 float Clock() {
     static struct timespec _base;
     static bool first_call = true;
@@ -173,9 +155,6 @@ ADPFManager::~ADPFManager() {
         if (obj_perfhint_render_session_ != nullptr) {
             env->DeleteGlobalRef(obj_perfhint_render_session_);
         }
-        if (thermal_manager_ != nullptr) {
-            AThermal_releaseManager(thermal_manager_);
-        }
     }
 #endif
 }
@@ -183,21 +162,9 @@ ADPFManager::~ADPFManager() {
 bool ADPFManager::registerListener() {
 #if PLATFORM_ANDROID
     // Initialize PowerManager reference.
-    if(android_get_device_api_level() < 31 || InitializePowerManager() == false) {
+    if(InitializePowerManager()) {
         // The device might not support thermal APIs, it will not initialized.
-        return false;
-    }
-
-    // Retrieve power manager and register thermal state change callback.
-    if (android_get_device_api_level() >= 30) {
-        // Use NDK Thermal API.
-        auto manager = GetThermalManager();
-        if (manager != nullptr) {
-            auto ret = AThermal_registerThermalStatusListener(manager, thermal_callback,
-                                                            nullptr);
-            UE_LOG(LogAndroidPerformance, Log, TEXT("Thermal Status callback registerred:%d"), ret);
-            return true;
-        }
+        return true;
     }
 #endif
 
@@ -206,18 +173,6 @@ bool ADPFManager::registerListener() {
 }
 
 bool ADPFManager::unregisterListener() {
-#if PLATFORM_ANDROID
-    // Remove the thermal state change listener on pause.
-    if (android_get_device_api_level() >= 30) {
-        // Use NDK Thermal API.
-        auto manager = GetThermalManager();
-        if (manager != nullptr) {
-            auto ret = AThermal_unregisterThermalStatusListener(
-                    manager, thermal_callback, nullptr);
-            UE_LOG(LogAndroidPerformance, Log, TEXT("Thermal Status callback unregisterred:%d"), ret);
-        }
-    }
-#endif
     return true;
 }
 
@@ -252,9 +207,6 @@ void ADPFManager::Monitor() {
             if (quality_mode == 1) {
                 saveQualityLevel(thermal_headroom_);
             }
-            else {
-                saveQualityLevel(max_quality_count - thermal_status_ - 1);
-            }
 
             // TODO Change the quality and FPS settings to match the game's status.
             uint32_t new_target = target_quality_level;
@@ -278,7 +230,11 @@ void ADPFManager::Monitor() {
         // StartupModule is called render thread id is changed.
         if (initialized_performance_hint_manager == false) {
             initialized_performance_hint_manager = true;
-            InitializePerformanceHintManager();
+            bool init = InitializePerformanceHintManager();
+            if(!init) {
+                UE_LOG(LogAndroidPerformance, Log, TEXT("dodo init fail set console to zero"));
+                CVarAndroidPerformanceHintEnabled.AsVariable()->Set(0, ECVF_SetByCode);
+            }
         }
 
         // Check max fps is changed, and caluate nanosec duration
@@ -303,13 +259,6 @@ void ADPFManager::SetThermalStatus(int32_t i){
 // Initialize JNI calls for the powermanager.
 bool ADPFManager::InitializePowerManager() {
 #if PLATFORM_ANDROID
-    if (android_get_device_api_level() >= 31) {
-        // Initialize the powermanager using NDK API.
-        thermal_manager_ = AThermal_acquireManager();
-    } else {
-        return false;
-    }
-
     if (JNIEnv* env = FAndroidApplication::GetJavaEnv()) {
         // Retrieve class information
         jclass context = env->FindClass("android/content/Context");
@@ -362,13 +311,6 @@ bool ADPFManager::InitializePowerManager() {
 
 // Retrieve current thermal headroom using JNI call.
 float ADPFManager::UpdateThermalStatusHeadRoom() {
-#if __ANDROID_API__ >= 31
-    // Use NDK API to retrieve thermal status headroom.
-    thermal_headroom_ = AThermal_getThermalHeadroom(
-            thermal_manager_, kThermalHeadroomUpdateThreshold);
-    return thermal_headroom_;
-#endif
-
     if (get_thermal_headroom_ == 0) {
         return 0.f;
     }
