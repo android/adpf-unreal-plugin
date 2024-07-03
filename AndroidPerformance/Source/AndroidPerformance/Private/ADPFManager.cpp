@@ -282,16 +282,21 @@ void ADPFManager::Monitor() {
         }
 
         // Check max fps is changed, and caluate nanosec duration
+        bool update_target_duration = false;
         if(prev_max_fps != GEngine->GetMaxFPS()) {
             prev_max_fps = GEngine->GetMaxFPS();
+            update_target_duration = true;
             prev_max_fps_nano = prev_max_fps == 0.0f ? 16666666 : fpsToNanosec(prev_max_fps);
         }
 
         // Update hint session.
         if(GGameThreadTime > 0) {
-            UpdatePerfHintGameSession(static_cast<jlong>(GGameThreadTime * 1000), prev_max_fps_nano);
+            UpdatePerfHintGameSession(static_cast<jlong>(GGameThreadTime * 1000), prev_max_fps_nano, update_target_duration);
         }
-        UpdatePerfHintRenderSession(findLongestNanosec(GRenderThreadTime, GRHIThreadTime), prev_max_fps_nano);
+        else {
+            prev_max_fps = 0;
+        }
+        UpdatePerfHintRenderSession(findLongestNanosec(GRenderThreadTime, GRHIThreadTime), prev_max_fps_nano, update_target_duration);
     }
 #endif
 }
@@ -513,7 +518,7 @@ PRAGMA_ENABLE_DEPRECATION_WARNINGS
 // Indicates the start and end of the performance intensive task.
 // The methods call performance hint API to tell the performance
 // hint to the system.
-void ADPFManager::UpdatePerfHintGameSession(jlong duration_ns, jlong target_duration_ns) {
+void ADPFManager::UpdatePerfHintGameSession(jlong duration_ns, jlong target_duration_ns, bool update_target_duration) {
     if (obj_perfhint_game_session_) {
         if(duration_ns > target_duration_ns) {
             UE_LOG(LogAndroidPerformance, Log, TEXT("Game threads will be boosted, duration_ns %lld, target_duration_ns %lld"),
@@ -525,14 +530,16 @@ void ADPFManager::UpdatePerfHintGameSession(jlong duration_ns, jlong target_dura
         if (JNIEnv* env = FAndroidApplication::GetJavaEnv()) {
             env->CallVoidMethod(obj_perfhint_game_session_, report_actual_game_work_duration_,
                                 duration_ns);
-            env->CallVoidMethod(obj_perfhint_game_session_, update_target_game_work_duration_,
-                                target_duration_ns);
+            if(update_target_duration) {
+                env->CallVoidMethod(obj_perfhint_game_session_, update_target_game_work_duration_,
+                                    target_duration_ns);
+            }
         }
 #endif
     }
 }
 
-void ADPFManager::UpdatePerfHintRenderSession(jlong duration_ns, jlong target_duration_ns) {
+void ADPFManager::UpdatePerfHintRenderSession(jlong duration_ns, jlong target_duration_ns, bool update_target_duration) {
     if (obj_perfhint_render_session_) {
         if(duration_ns > target_duration_ns) {
             UE_LOG(LogAndroidPerformance, Log, TEXT("Render threads will be boosted, duration_ns %lld, target_duration_ns %lld"),
@@ -544,8 +551,10 @@ void ADPFManager::UpdatePerfHintRenderSession(jlong duration_ns, jlong target_du
         if (JNIEnv* env = FAndroidApplication::GetJavaEnv()) {
             env->CallVoidMethod(obj_perfhint_render_session_, report_actual_render_work_duration_,
                                 duration_ns);
-            env->CallVoidMethod(obj_perfhint_render_session_, update_target_render_work_duration_,
-                                target_duration_ns);
+            if(update_target_duration) {
+                env->CallVoidMethod(obj_perfhint_render_session_, update_target_render_work_duration_,
+                                    target_duration_ns);
+            }
         }
 #endif
     }

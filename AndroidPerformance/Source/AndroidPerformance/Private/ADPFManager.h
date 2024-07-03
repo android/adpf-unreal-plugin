@@ -86,8 +86,8 @@ class ADPFManager {
     // Indicates the start and end of the performance intensive task.
     // The methods call performance hint API to tell the performance
     // hint to the system.
-    void UpdatePerfHintGameSession(jlong duration_ns, jlong target_duration_ns);
-    void UpdatePerfHintRenderSession(jlong duration_ns, jlong target_duration_ns);
+    void UpdatePerfHintGameSession(jlong duration_ns, jlong target_duration_ns, bool update_target_duration = false);
+    void UpdatePerfHintRenderSession(jlong duration_ns, jlong target_duration_ns, bool update_target_duration = false);
 
     AThermalManager* thermal_manager_;
     bool initialized_performance_hint_manager;
