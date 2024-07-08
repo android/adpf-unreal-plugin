@@ -27,8 +27,6 @@
 // Forward declarations of functions that need to be in C decl.
 extern "C" {
 void nativeThermalStatusChanged(JNIEnv* env, jclass cls, int32_t thermalState);
-void nativeRegisterThermalStatusListener(JNIEnv* env, jclass cls);
-void nativeUnregisterThermalStatusListener(JNIEnv* env, jclass cls);
 }
 
 /*
