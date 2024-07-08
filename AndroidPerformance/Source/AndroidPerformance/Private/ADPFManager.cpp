@@ -250,7 +250,7 @@ void ADPFManager::Monitor() {
             UpdatePerfHintGameSession(static_cast<jlong>(GGameThreadTime * 1000), prev_max_fps_nano, update_target_duration);
         }
         else {
-            prev_max_fps = 0;
+            prev_max_fps = -1.0f;
         }
         UpdatePerfHintRenderSession(findLongestNanosec(GRenderThreadTime, GRHIThreadTime), prev_max_fps_nano, update_target_duration);
     }
