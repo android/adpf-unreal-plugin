@@ -24,12 +24,7 @@
 
 #include "Scalability.h"
 
-// Forward declarations of functions that need to be in C decl.
-extern "C" {
-void nativeThermalStatusChanged(JNIEnv* env, jclass cls, int32_t thermalState);
-void nativeRegisterThermalStatusListener(JNIEnv* env, jclass cls);
-void nativeUnregisterThermalStatusListener(JNIEnv* env, jclass cls);
-}
+#include "Providers/Providers.h"
 
 /*
  * ADPFManager class anages the ADPF APIs.
@@ -47,21 +42,17 @@ class ADPFManager {
     ADPFManager(ADPFManager const&) = delete;
     void operator=(ADPFManager const&) = delete;
 
-    bool registerListener();
-    bool unregisterListener();
+    bool Init();
+    bool Deinit();
 
     // Invoke the method periodically (once a frame) to monitor
     // the device's thermal throttling status.
     void Monitor();
 
-    // Method to set thermal status. Need to be public since the method
-    // is called from C native listener.
-    void SetThermalStatus(const int32_t i);
+    // Get current thermal status and headroom.
+    int32_t GetThermalStatus() { return (int32_t)provider_->GetThermalStatus(); }
 
-    // Method to retrieve thermal manager. The API is used to register/unregister
-    // callbacks from C API.
-    AThermalManager* GetThermalManager() { return thermal_manager_; }
-
+    float GetThermalHeadroom() { return thermal_headroom_; }
  private:
     inline jlong fpsToNanosec(const float maxFPS);
     inline jlong findLongestNanosec(const uint32_t a, const uint32_t b);
@@ -75,13 +66,8 @@ class ADPFManager {
     ADPFManager();
 
     // Functions to initialize ADPF API's calls.
-    bool InitializePowerManager();
     float UpdateThermalStatusHeadRoom();
     bool InitializePerformanceHintManager();
-
-    // Get current thermal status and headroom.
-    int32_t GetThermalStatus() { return thermal_status_; }
-    float GetThermalHeadroom() { return thermal_headroom_; }
 
     // Indicates the start and end of the performance intensive task.
     // The methods call performance hint API to tell the performance
@@ -89,13 +75,11 @@ class ADPFManager {
     void UpdatePerfHintGameSession(jlong duration_ns, jlong target_duration_ns, bool update_target_duration = false);
     void UpdatePerfHintRenderSession(jlong duration_ns, jlong target_duration_ns, bool update_target_duration = false);
 
-    AThermalManager* thermal_manager_;
+    TUniquePtr<IProvider> provider_; 
+
     bool initialized_performance_hint_manager;
-    int32_t thermal_status_; // enum for AThermalStatus
     float thermal_headroom_; // 0.0f ~ 1.0f, can be over 1.0f but it means THERMAL_STATUS_SEVERE 
     float last_clock_;
-    jobject obj_power_service_;
-    jmethodID get_thermal_headroom_;
 
     jobject obj_perfhint_service_;
     jobject obj_perfhint_game_session_;

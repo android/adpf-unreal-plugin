@@ -52,37 +52,6 @@ static TAutoConsoleVariable<int32> CVarAndroidPerformanceChangeQualites(
     TEXT(" 2: Settings are adjusted according to the thermal listener"),
     ECVF_RenderThreadSafe);
 
-// Native callback for thermal status change listener.
-// The function is called from Activity implementation in Java.
-void nativeThermalStatusChanged(JNIEnv *env, jclass cls, jint thermalState) {
-    UE_LOG(LogAndroidPerformance, Log, TEXT("Thermal Status updated to:%d"), thermalState);
-    ADPFManager::getInstance().SetThermalStatus(thermalState);
-}
-
-// Native API to register/unregiser thethermal status change listener.
-// The function is called from Activity implementation in Java.
-void thermal_callback(void *data, AThermalStatus status) {
-    ADPFManager::getInstance().SetThermalStatus(status);
-}
-
-void nativeRegisterThermalStatusListener(JNIEnv *env, jclass cls) {
-    auto manager = ADPFManager::getInstance().GetThermalManager();
-    if (manager != nullptr) {
-        auto ret = AThermal_registerThermalStatusListener(manager, thermal_callback,
-                                                          nullptr);
-        UE_LOG(LogAndroidPerformance, Log, TEXT("Thermal Status callback registerred:%d"), ret);
-    }
-}
-
-void nativeUnregisterThermalStatusListener(JNIEnv *env, jclass cls) {
-    auto manager = ADPFManager::getInstance().GetThermalManager();
-    if (manager != nullptr) {
-        auto ret = AThermal_unregisterThermalStatusListener(
-                manager, thermal_callback, nullptr);
-        UE_LOG(LogAndroidPerformance, Log, TEXT("Thermal Status callback unregisterred:%d"), ret);
-    }
-}
-
 float Clock() {
     static struct timespec _base;
     static bool first_call = true;
@@ -100,12 +69,8 @@ float Clock() {
 }
 
 ADPFManager::ADPFManager()
-        : thermal_manager_(nullptr),
-            initialized_performance_hint_manager(false),
-            thermal_status_(0),
+        :   initialized_performance_hint_manager(false),
             thermal_headroom_(0.f),
-            obj_power_service_(nullptr),
-            get_thermal_headroom_(0),
             obj_perfhint_service_(nullptr),
             obj_perfhint_game_session_(nullptr),
             obj_perfhint_render_session_(nullptr),
@@ -161,9 +126,6 @@ ADPFManager::~ADPFManager() {
 #if PLATFORM_ANDROID
     // Remove global reference.
     if (JNIEnv* env = FAndroidApplication::GetJavaEnv()) {
-        if (obj_power_service_ != nullptr) {
-            env->DeleteGlobalRef(obj_power_service_);
-        }
         if (obj_perfhint_service_ != nullptr) {
             env->DeleteGlobalRef(obj_perfhint_service_);
         }
@@ -173,51 +135,20 @@ ADPFManager::~ADPFManager() {
         if (obj_perfhint_render_session_ != nullptr) {
             env->DeleteGlobalRef(obj_perfhint_render_session_);
         }
-        if (thermal_manager_ != nullptr) {
-            AThermal_releaseManager(thermal_manager_);
-        }
     }
 #endif
 }
 
-bool ADPFManager::registerListener() {
-#if PLATFORM_ANDROID
-    // Initialize PowerManager reference.
-    if(android_get_device_api_level() < 31 || InitializePowerManager() == false) {
-        // The device might not support thermal APIs, it will not initialized.
-        return false;
-    }
-
-    // Retrieve power manager and register thermal state change callback.
-    if (android_get_device_api_level() >= 30) {
-        // Use NDK Thermal API.
-        auto manager = GetThermalManager();
-        if (manager != nullptr) {
-            auto ret = AThermal_registerThermalStatusListener(manager, thermal_callback,
-                                                            nullptr);
-            UE_LOG(LogAndroidPerformance, Log, TEXT("Thermal Status callback registerred:%d"), ret);
-            return true;
-        }
-    }
-#endif
-
-    // The device might not support thermal APIs, it will not initialized.
-    return false;
+bool ADPFManager::Init() {
+    provider_ = CreateThermalProvider();
+    UE_LOG(LogAndroidPerformance, Log, TEXT("Created Thermal Provider - %s"), *FString(provider_->GetName()));
+    return provider_ != nullptr;
 }
 
-bool ADPFManager::unregisterListener() {
-#if PLATFORM_ANDROID
-    // Remove the thermal state change listener on pause.
-    if (android_get_device_api_level() >= 30) {
-        // Use NDK Thermal API.
-        auto manager = GetThermalManager();
-        if (manager != nullptr) {
-            auto ret = AThermal_unregisterThermalStatusListener(
-                    manager, thermal_callback, nullptr);
-            UE_LOG(LogAndroidPerformance, Log, TEXT("Thermal Status callback unregisterred:%d"), ret);
-        }
-    }
-#endif
+bool ADPFManager::Deinit() {
+    // Release all utilized Thermal APIs and clean resources
+    provider_.Reset();
+
     return true;
 }
 
@@ -242,7 +173,7 @@ void ADPFManager::Monitor() {
         last_clock_ = current_clock;
 
         // for debug
-        UE_LOG(LogAndroidPerformance, Log, TEXT("Headroom %.3f %d FPS %.2f temp %.2f"), thermal_headroom_, thermal_status_,
+        UE_LOG(LogAndroidPerformance, Log, TEXT("Headroom %.3f %d FPS %.2f temp %.2f"), thermal_headroom_, provider_->GetThermalStatus(),
                 fps_total / (float)fps_count, FAndroidMisc::GetDeviceTemperatureLevel());
         fps_total = 0.0f;
         fps_count = 0;
@@ -253,7 +184,7 @@ void ADPFManager::Monitor() {
                 saveQualityLevel(thermal_headroom_);
             }
             else {
-                saveQualityLevel(max_quality_count - thermal_status_ - 1);
+                saveQualityLevel(max_quality_count - (int32_t)provider_->GetThermalStatus() - 1);
             }
 
             // TODO Change the quality and FPS settings to match the game's status.
@@ -281,8 +212,8 @@ void ADPFManager::Monitor() {
             InitializePerformanceHintManager();
         }
 
-        // Check max fps is changed, and caluate nanosec duration
         bool update_target_duration = false;
+        // Check max fps is changed, and caluate nanosec duration
         if(prev_max_fps != GEngine->GetMaxFPS()) {
             prev_max_fps = GEngine->GetMaxFPS();
             update_target_duration = true;
@@ -292,8 +223,7 @@ void ADPFManager::Monitor() {
         // Update hint session.
         if(GGameThreadTime > 0) {
             UpdatePerfHintGameSession(static_cast<jlong>(GGameThreadTime * 1000), prev_max_fps_nano, update_target_duration);
-        }
-        else {
+        } else {
             prev_max_fps = -1.0f;
         }
         UpdatePerfHintRenderSession(findLongestNanosec(GRenderThreadTime, GRHIThreadTime), prev_max_fps_nano, update_target_duration);
@@ -301,91 +231,10 @@ void ADPFManager::Monitor() {
 #endif
 }
 
-void ADPFManager::SetThermalStatus(int32_t i){
-    thermal_status_ = i;
-}
-
-// Initialize JNI calls for the powermanager.
-bool ADPFManager::InitializePowerManager() {
-#if PLATFORM_ANDROID
-    if (android_get_device_api_level() >= 31) {
-        // Initialize the powermanager using NDK API.
-        thermal_manager_ = AThermal_acquireManager();
-    } else {
-        return false;
-    }
-
-    if (JNIEnv* env = FAndroidApplication::GetJavaEnv()) {
-        // Retrieve class information
-        jclass context = env->FindClass("android/content/Context");
-
-        // Get the value of a constant
-        jfieldID fid =
-                env->GetStaticFieldID(context, "POWER_SERVICE", "Ljava/lang/String;");
-        jobject str_svc = env->GetStaticObjectField(context, fid);
-
-        // Get the method 'getSystemService' and call it
-        extern struct android_app* GNativeAndroidApp;
-        jmethodID mid_getss = env->GetMethodID(
-                context, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;");
-        jobject obj_power_service = env->CallObjectMethod(
-                GNativeAndroidApp->activity->clazz, mid_getss, str_svc);
-
-        // Add global reference to the power service object.
-        obj_power_service_ = env->NewGlobalRef(obj_power_service);
-
-        jclass cls_power_service = env->GetObjectClass(obj_power_service_);
-        get_thermal_headroom_ =
-                env->GetMethodID(cls_power_service, "getThermalHeadroom", "(I)F");
-
-        // Free references
-        env->DeleteLocalRef(cls_power_service);
-        env->DeleteLocalRef(obj_power_service);
-        env->DeleteLocalRef(str_svc);
-        env->DeleteLocalRef(context);
-
-        // Remove exception
-        if(env->ExceptionCheck()) {
-            env->ExceptionDescribe();
-            env->ExceptionClear();
-        }
-    }
-#endif
-
-    if (get_thermal_headroom_ == 0) {
-        // The API is not supported in the platform version.
-        return false;
-    }
-
-    if(FMath::IsNaN(UpdateThermalStatusHeadRoom())) {
-        // If thermal headroom is NaN, this device is not support thermal API.
-        return false;
-    }
-
-    return true;
-}
-
 // Retrieve current thermal headroom using JNI call.
 float ADPFManager::UpdateThermalStatusHeadRoom() {
-#if __ANDROID_API__ >= 31
-    // Use NDK API to retrieve thermal status headroom.
-    thermal_headroom_ = AThermal_getThermalHeadroom(
-            thermal_manager_, kThermalHeadroomUpdateThreshold);
-    return thermal_headroom_;
-#endif
+    thermal_headroom_ = provider_->GetThermalHeadroom(kThermalHeadroomUpdateThreshold);
 
-    if (get_thermal_headroom_ == 0) {
-        return 0.f;
-    }
-
-#if PLATFORM_ANDROID
-    // Get thermal headroom!
-    if (JNIEnv* env = FAndroidApplication::GetJavaEnv()) {
-        thermal_headroom_ =
-                env->CallFloatMethod(obj_power_service_, get_thermal_headroom_,
-                                                        kThermalHeadroomUpdateThreshold);
-    }
-#endif
     return thermal_headroom_;
 }
 
@@ -399,6 +248,7 @@ bool ADPFManager::InitializePerformanceHintManager() {
         // Get the value of a constant
         jfieldID fid = env->GetStaticFieldID(context, "PERFORMANCE_HINT_SERVICE",
                                              "Ljava/lang/String;");
+
         if(!fid) {
             // Remove exception
             if(env->ExceptionCheck()) {
@@ -407,6 +257,7 @@ bool ADPFManager::InitializePerformanceHintManager() {
             }
             return false;
         }
+
         jobject str_svc = env->GetStaticObjectField(context, fid);
 
         // Get the method 'getSystemService' and call it
@@ -530,7 +381,7 @@ void ADPFManager::UpdatePerfHintGameSession(jlong duration_ns, jlong target_dura
         if (JNIEnv* env = FAndroidApplication::GetJavaEnv()) {
             env->CallVoidMethod(obj_perfhint_game_session_, report_actual_game_work_duration_,
                                 duration_ns);
-            if(update_target_duration) {
+            if (update_target_duration) {
                 env->CallVoidMethod(obj_perfhint_game_session_, update_target_game_work_duration_,
                                     target_duration_ns);
             }
@@ -551,7 +402,7 @@ void ADPFManager::UpdatePerfHintRenderSession(jlong duration_ns, jlong target_du
         if (JNIEnv* env = FAndroidApplication::GetJavaEnv()) {
             env->CallVoidMethod(obj_perfhint_render_session_, report_actual_render_work_duration_,
                                 duration_ns);
-            if(update_target_duration) {
+            if (update_target_duration) {
                 env->CallVoidMethod(obj_perfhint_render_session_, update_target_render_work_duration_,
                                     target_duration_ns);
             }

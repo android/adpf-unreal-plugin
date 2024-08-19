@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--AndroidPerformance plugin additions-->
+<root xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- init section is always evaluated once per architecture -->
+  <init>
+    <log text="AndroidPerformance APL init"/>
+  </init>
+
+  <!-- optional files or directories to copy to Intermediate/Android/APK -->
+  <resourceCopies>
+    <log text="Copying AndroidPerformance plugin files to staging"/>
+    <copyDir src="$S(PluginDir)/Java/Samsung" dst="$S(BuildDir)/src/com/samsung/android/gamesdk/" />
+  	<copyFile src="$S(PluginDir)/ThirdParty/SamsungGameSDK/GameSDK_v3.5.jar" dst="$S(BuildDir)/libs/GameSDK_v3.5.jar" />
+  </resourceCopies>
+
+  <buildGradleAdditions>
+      <insert>
+        dependencies {
+          implementation files('src/main/libs/GameSDK_v3.5.jar')
+        }
+      </insert>
+  </buildGradleAdditions>
+</root>

@@ -26,4 +26,8 @@ public:
     void ShutdownModule() override;
 
     void Tick(UWorld* world, ELevelTick tick_type, float delta_time);
+
+    float GetThermalHeadroom();
+
+    int32_t GetThermalStatus();
 };

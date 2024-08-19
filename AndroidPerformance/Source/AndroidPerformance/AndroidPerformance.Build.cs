@@ -38,5 +38,10 @@ public class AndroidPerformance : ModuleRules
         string PluginPath = Utils.MakePathRelativeTo(ModuleDirectory, Target.RelativeEnginePath);
 
         PrivateDependencyModuleNames.AddRange(new string[] { "Launch" });
+
+        if (Target.Platform == UnrealTargetPlatform.Android)
+        {
+            AdditionalPropertiesForReceipt.Add("AndroidPlugin", Path.Combine(PluginPath, "AndroidPerformance_APL.xml"));
+        }
     }
 }

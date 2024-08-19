@@ -25,12 +25,11 @@ IMPLEMENT_MODULE(FAndroidPerformanceModule, AndroidPerformance)
 
 DEFINE_LOG_CATEGORY(LogAndroidPerformance);
 
-void FAndroidPerformanceModule::StartupModule()
-{
+void FAndroidPerformanceModule::StartupModule() {
 #if PLATFORM_ANDROID
     UE_LOG(LogAndroidPerformance, Log, TEXT("Android Performance Module Started"));
 
-    bool isInitialized = ADPFManager::getInstance().registerListener();
+    bool isInitialized = ADPFManager::getInstance().Init();
 
     // registration tick
     if(isInitialized)
@@ -39,28 +38,41 @@ void FAndroidPerformanceModule::StartupModule()
     }
     else
     {
-        UE_LOG(LogAndroidPerformance, Log, TEXT("Android Performance is not initialized because of not supporint device"));
+        UE_LOG(LogAndroidPerformance, Log, TEXT("Android Performance is not initialized because of no support on device"));
     }
 #endif
 }
 
-void FAndroidPerformanceModule::ShutdownModule()
-{
+void FAndroidPerformanceModule::ShutdownModule() {
 #if PLATFORM_ANDROID
     UE_LOG(LogAndroidPerformance, Log, TEXT("Android Performance Module Shutdown"));
 
     // unregistration tick
     FWorldDelegates::OnWorldTickStart.RemoveAll(this);
 
-    ADPFManager::getInstance().unregisterListener();
+    ADPFManager::getInstance().Deinit();
 #endif
 }
 
-void FAndroidPerformanceModule::Tick(UWorld* world, ELevelTick tick_type, float delta_time)
-{
+void FAndroidPerformanceModule::Tick(UWorld* world, ELevelTick tick_type, float delta_time) {
 #if PLATFORM_ANDROID
     ADPFManager::getInstance().Monitor();
 #endif
+}
+
+
+float FAndroidPerformanceModule::GetThermalHeadroom() {
+#if PLATFORM_ANDROID
+    return ADPFManager::getInstance().GetThermalHeadroom();
+#endif
+    return 0;
+}
+
+int32_t FAndroidPerformanceModule::GetThermalStatus() {
+#if PLATFORM_ANDROID
+    return ADPFManager::getInstance().GetThermalStatus();
+#endif
+    return 0;
 }
 
 #undef LOGTEXT_NAMESPACE
