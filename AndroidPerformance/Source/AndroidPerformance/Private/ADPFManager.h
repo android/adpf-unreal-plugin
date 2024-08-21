@@ -68,8 +68,11 @@ class ADPFManager {
     void saveQualityLevel(const int32_t warning_level);
     void saveQualityLevel(const float head_room);
 
-    // Update thermal headroom each sec.
-    static constexpr int32_t kThermalHeadroomUpdateThreshold = 1;
+    // Update thermal headroom every 15 seconds.
+    static constexpr int32_t kThermalHeadroomUpdateThreshold = 15;
+
+    // Get current thermal headroom.
+    static constexpr int32_t kThermalHeadroomForecastSeconds = 0;
 
     // Ctor. It's private since the class is designed as a singleton.
     ADPFManager();

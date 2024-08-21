@@ -370,7 +370,7 @@ float ADPFManager::UpdateThermalStatusHeadRoom() {
 #if __ANDROID_API__ >= 31
     // Use NDK API to retrieve thermal status headroom.
     thermal_headroom_ = AThermal_getThermalHeadroom(
-            thermal_manager_, kThermalHeadroomUpdateThreshold);
+            thermal_manager_, kThermalHeadroomForecastSeconds);
     return thermal_headroom_;
 #endif
 
@@ -383,7 +383,7 @@ float ADPFManager::UpdateThermalStatusHeadRoom() {
     if (JNIEnv* env = FAndroidApplication::GetJavaEnv()) {
         thermal_headroom_ =
                 env->CallFloatMethod(obj_power_service_, get_thermal_headroom_,
-                                                        kThermalHeadroomUpdateThreshold);
+                                                        kThermalHeadroomForecastSeconds);
     }
 #endif
     return thermal_headroom_;
