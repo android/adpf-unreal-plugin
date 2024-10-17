@@ -64,7 +64,6 @@ class ADPFManager {
 
  private:
     inline jlong fpsToNanosec(const float maxFPS);
-    inline jlong findLongestNanosec(const uint32_t a, const uint32_t b);
     void saveQualityLevel(const int32_t warning_level);
     void saveQualityLevel(const float head_room);
 
@@ -89,8 +88,8 @@ class ADPFManager {
     // Indicates the start and end of the performance intensive task.
     // The methods call performance hint API to tell the performance
     // hint to the system.
-    void UpdatePerfHintGameSession(jlong duration_ns, jlong target_duration_ns, bool update_target_duration = false);
-    void UpdatePerfHintRenderSession(jlong duration_ns, jlong target_duration_ns, bool update_target_duration = false);
+    void UpdatePerfHintSession(jlong duration_ns, jlong target_duration_ns, bool update_target_duration,
+            jobject obj_perfhint_session_, jmethodID report_actual_work_duration, jmethodID update_target_work_duration);
 
     AThermalManager* thermal_manager_;
     bool initialized_performance_hint_manager;
@@ -103,10 +102,13 @@ class ADPFManager {
     jobject obj_perfhint_service_;
     jobject obj_perfhint_game_session_;
     jobject obj_perfhint_render_session_;
+    jobject obj_perfhint_rhi_session_;
     jmethodID report_actual_game_work_duration_;
     jmethodID report_actual_render_work_duration_;
+    jmethodID report_actual_rhi_work_duration_;
     jmethodID update_target_game_work_duration_;
     jmethodID update_target_render_work_duration_;
+    jmethodID update_target_rhi_work_duration_;
     jlong preferred_update_rate_;
 
     static const int32_t max_quality_count = 4;
