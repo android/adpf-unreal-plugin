@@ -69,7 +69,7 @@ void nativeRegisterThermalStatusListener(JNIEnv *env, jclass cls) {
     auto manager = ADPFManager::getInstance().GetThermalManager();
     if (manager != nullptr) {
         auto ret = AThermal_registerThermalStatusListener(manager, thermal_callback,
-                                                        nullptr);
+                                                          nullptr);
         UE_LOG(LogAndroidPerformance, Log, TEXT("Thermal Status callback registerred:%d"), ret);
     }
 }
@@ -431,7 +431,7 @@ bool ADPFManager::InitializePerformanceHintManager() {
 
         // Get the value of a constant
         jfieldID fid = env->GetStaticFieldID(context, "PERFORMANCE_HINT_SERVICE",
-                                            "Ljava/lang/String;");
+                                             "Ljava/lang/String;");
         if(!fid) {
             // Remove exception
             if(env->ExceptionCheck()) {
@@ -457,7 +457,7 @@ bool ADPFManager::InitializePerformanceHintManager() {
         jclass cls_perfhint_service = env->GetObjectClass(obj_perfhint_service_);
         jmethodID mid_createhintsession =
                 env->GetMethodID(cls_perfhint_service, "createHintSession",
-                                "([IJ)Landroid/os/PerformanceHintManager$Session;");
+                                 "([IJ)Landroid/os/PerformanceHintManager$Session;");
         jmethodID mid_preferedupdaterate = env->GetMethodID(
                 cls_perfhint_service, "getPreferredUpdateRateNanos", "()J");
         

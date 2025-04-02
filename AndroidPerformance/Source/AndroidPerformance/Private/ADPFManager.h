@@ -32,8 +32,8 @@ void nativeUnregisterThermalStatusListener(JNIEnv* env, jclass cls);
 }
 
 /*
-* ADPFManager class anages the ADPF APIs.
-*/
+ * ADPFManager class anages the ADPF APIs.
+ */
 class ADPFManager {
 public:
     // Singleton function.
