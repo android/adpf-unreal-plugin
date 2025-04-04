@@ -84,6 +84,7 @@ float Clock() {
 ADPFManager::ADPFManager()
         : thermal_manager_(nullptr),
             initialized_performance_hint_manager(false),
+            support_performance_hint_manager(true),
             thermal_status_(0),
             thermal_headroom_(0.f),
             obj_power_service_(nullptr),
@@ -91,10 +92,13 @@ ADPFManager::ADPFManager()
             obj_perfhint_service_(nullptr),
             obj_perfhint_game_session_(nullptr),
             obj_perfhint_render_session_(nullptr),
+            obj_perfhint_rhi_session_(nullptr),
             report_actual_game_work_duration_(0),
             report_actual_render_work_duration_(0),
+            report_actual_rhi_work_duration_(0),
             update_target_game_work_duration_(0),
             update_target_render_work_duration_(0),
+            update_target_rhi_work_duration_(0),
             preferred_update_rate_(0),
             current_quality_level(max_quality_count - 1),
             target_quality_level(max_quality_count - 1),
@@ -143,17 +147,9 @@ ADPFManager::~ADPFManager() {
 #if PLATFORM_ANDROID
     // Remove global reference.
     if (JNIEnv* env = FAndroidApplication::GetJavaEnv()) {
+        DestroyPerformanceHintManager();
         if (obj_power_service_ != nullptr) {
             env->DeleteGlobalRef(obj_power_service_);
-        }
-        if (obj_perfhint_service_ != nullptr) {
-            env->DeleteGlobalRef(obj_perfhint_service_);
-        }
-        if (obj_perfhint_game_session_ != nullptr) {
-            env->DeleteGlobalRef(obj_perfhint_game_session_);
-        }
-        if (obj_perfhint_render_session_ != nullptr) {
-            env->DeleteGlobalRef(obj_perfhint_render_session_);
         }
     }
 #endif
@@ -181,6 +177,13 @@ bool ADPFManager::unregisterListener() {
 void ADPFManager::Monitor() {
 #if PLATFORM_ANDROID
     if (CVarAndroidPerformanceEnabled.GetValueOnAnyThread() == 0) {
+        // check performance hint session is created, and delete it.
+        if(initialized_performance_hint_manager) {
+            initialized_performance_hint_manager = false;
+            DestroyPerformanceHintManager();
+            UE_LOG(LogAndroidPerformance, Log, TEXT("Performance Hint Manager Destroyed because of CVar disabled."));
+        }
+
         return;
     }
 
@@ -225,34 +228,60 @@ void ADPFManager::Monitor() {
     }
 
     // Hint manager logic based on current FPS and actual thread time.
-    if (CVarAndroidPerformanceHintEnabled.GetValueOnAnyThread() != 0) {
-        // Initialize PowerHintManager reference on here, when
-        // StartupModule is called render thread id is changed.
+    if ((CVarAndroidPerformanceHintEnabled.GetValueOnAnyThread()) != 0 && support_performance_hint_manager) {
+        // Initialization, attempt only once if not already initialized.
         if (initialized_performance_hint_manager == false) {
-            initialized_performance_hint_manager = true;
-            bool init = InitializePerformanceHintManager();
-            if(!init) {
-                UE_LOG(LogAndroidPerformance, Log, TEXT("dodo init fail set console to zero"));
-                CVarAndroidPerformanceHintEnabled.AsVariable()->Set(0, ECVF_SetByCode);
+            if(InitializePerformanceHintManager()) {
+                UE_LOG(LogAndroidPerformance, Log, TEXT("Performance Hint Manager Initialized."));
+                initialized_performance_hint_manager = true;
+
+                // Force target duration calculation on the first update after initialization
+                prev_max_fps = -1.0f;
+            }
+            else {
+                // Initialization failed, disable support permanently for this run.
+                support_performance_hint_manager = false;
             }
         }
 
-        // Check max fps is changed, and caluate nanosec duration
-        bool update_target_duration = false;
-        if(prev_max_fps != GEngine->GetMaxFPS()) {
-            prev_max_fps = GEngine->GetMaxFPS();
-            update_target_duration = true;
-            prev_max_fps_nano = prev_max_fps == 0.0f ? 16666666 : fpsToNanosec(prev_max_fps);
-        }
+        // Update Logic, proceed only if successfully initialized.
+        if(initialized_performance_hint_manager) {
+            // Check max fps is changed, and caluate nanosec duration
+            const float current_max_fps = GEngine->GetMaxFPS();
+            bool update_target_duration = false;
+            long long target_duration_nano = prev_max_fps_nano; // Default to previous value
+            if(prev_max_fps != current_max_fps) {
+                prev_max_fps = current_max_fps;
+                update_target_duration = true;
 
-        // Update hint session.
-        if(GGameThreadTime > 0) {
-            UpdatePerfHintGameSession(static_cast<jlong>(GGameThreadTime * 1000), prev_max_fps_nano, update_target_duration);
+                // Use default if max FPS is 0 (unlimited) or negative, otherwise calculate based on FPS.
+                target_duration_nano = (prev_max_fps <= 0.0f) ? 16666666 : fpsToNanosec(prev_max_fps);
+                prev_max_fps_nano = target_duration_nano; // Store the newly calculated value for next frame
+                UE_LOG(LogAndroidPerformance, Verbose, TEXT("Max FPS changed to %.2f, Target Duration set to %lld ns"), prev_max_fps, prev_max_fps_nano);
+            }
+
+            // Update the performance hint sessions with the actual thread time and target duration.
+            if(GGameThreadTime > 0) {
+                UpdatePerfHintSession(static_cast<jlong>(GGameThreadTime * 1000), target_duration_nano, update_target_duration,
+                        obj_perfhint_game_session_, report_actual_game_work_duration_, update_target_game_work_duration_);
+            }
+            else {
+                prev_max_fps = -1.0f;
+            }
+            UpdatePerfHintSession(static_cast<jlong>(GRenderThreadTime * 1000), target_duration_nano, update_target_duration,
+                    obj_perfhint_render_session_, report_actual_render_work_duration_, update_target_render_work_duration_);
+            UpdatePerfHintSession(static_cast<jlong>(GRHIThreadTime * 1000), target_duration_nano, update_target_duration,
+                    obj_perfhint_rhi_session_, report_actual_rhi_work_duration_, update_target_rhi_work_duration_);
         }
-        else {
+    }
+    else {
+        // Cleanup Logic, ff feature was initialized but is now disabled/unsupported
+        if(initialized_performance_hint_manager) {
+            initialized_performance_hint_manager = false;
             prev_max_fps = -1.0f;
+            DestroyPerformanceHintManager();
+            UE_LOG(LogAndroidPerformance, Log, TEXT("Performance Hint Manager Destroyed because of CVar disabled."));
         }
-        UpdatePerfHintRenderSession(findLongestNanosec(GRenderThreadTime, GRHIThreadTime), prev_max_fps_nano, update_target_duration);
     }
 #endif
 }
@@ -325,7 +354,7 @@ float ADPFManager::UpdateThermalStatusHeadRoom() {
     if (JNIEnv* env = FAndroidApplication::GetJavaEnv()) {
         thermal_headroom_ =
                 env->CallFloatMethod(obj_power_service_, get_thermal_headroom_,
-                                                        kThermalHeadroomUpdateThreshold);
+                                                        kThermalHeadroomForecastSeconds);
     }
 #endif
     return thermal_headroom_;
@@ -347,6 +376,7 @@ bool ADPFManager::InitializePerformanceHintManager() {
                 env->ExceptionDescribe();
                 env->ExceptionClear();
             }
+            UE_LOG(LogAndroidPerformance, Log, TEXT("Performance Hint Manager is not supported."));
             return false;
         }
         jobject str_svc = env->GetStaticObjectField(context, fid);
@@ -368,70 +398,38 @@ bool ADPFManager::InitializePerformanceHintManager() {
                                  "([IJ)Landroid/os/PerformanceHintManager$Session;");
         jmethodID mid_preferedupdaterate = env->GetMethodID(
                 cls_perfhint_service, "getPreferredUpdateRateNanos", "()J");
+        
+        const jlong DEFAULT_TARGET_NS = 16666666;
 
-        {
-            // Create int array which contain game thread ID.
+        // Function to create and initialize a hint session
+        auto CreateHintSession = [&](int32_t threadId, jobject& sessionGlobalRef, jmethodID& reportMethod, jmethodID& updateMethod) {
             jintArray array = env->NewIntArray(1);
-PRAGMA_DISABLE_DEPRECATION_WARNINGS
-            int32_t tids[1] = { static_cast<int32_t>(GGameThreadId)};
-PRAGMA_ENABLE_DEPRECATION_WARNINGS
-            env->SetIntArrayRegion(array, 0, 1, tids);
-            const jlong DEFAULT_TARGET_NS = 16666666;
+            env->SetIntArrayRegion(array, 0, 1, &threadId); 
 
-            // Create Hint session for game thread.
-            jobject obj_hintsession = env->CallObjectMethod(
-                    obj_perfhint_service_, mid_createhintsession, array, DEFAULT_TARGET_NS);
-            if (obj_hintsession == nullptr) {
-                UE_LOG(LogAndroidPerformance, Log, TEXT("Failed to create a perf hint session."));
+            jobject obj_hintsession = env->CallObjectMethod(obj_perfhint_service_, mid_createhintsession, array, DEFAULT_TARGET_NS);
+            if (obj_hintsession) {
+                sessionGlobalRef = env->NewGlobalRef(obj_hintsession);
+                preferred_update_rate_ = env->CallLongMethod(obj_perfhint_service_, mid_preferedupdaterate);
+
+                jclass cls_perfhint_session = env->GetObjectClass(obj_hintsession);
+                reportMethod = env->GetMethodID(cls_perfhint_session, "reportActualWorkDuration", "(J)V");
+                updateMethod = env->GetMethodID(cls_perfhint_session, "updateTargetWorkDuration", "(J)V");
             } else {
-                obj_perfhint_game_session_ = env->NewGlobalRef(obj_hintsession);
-                preferred_update_rate_ =
-                        env->CallLongMethod(obj_perfhint_service_, mid_preferedupdaterate);
-
-                // Retrieve mid of Session APIs.
-                jclass cls_perfhint_session = env->GetObjectClass(obj_perfhint_game_session_);
-                report_actual_game_work_duration_ = env->GetMethodID(
-                        cls_perfhint_session, "reportActualWorkDuration", "(J)V");
-                update_target_game_work_duration_ = env->GetMethodID(
-                        cls_perfhint_session, "updateTargetWorkDuration", "(J)V");
+                UE_LOG(LogAndroidPerformance, Log, TEXT("Failed to create a perf hint session."));
             }
 
-            // Free local references
             env->DeleteLocalRef(obj_hintsession);
             env->DeleteLocalRef(array);
-        }
+        };
 
-        {
-            // Create int array which contain render and RHI thread IDs.
-            jintArray array = env->NewIntArray(2);
 PRAGMA_DISABLE_DEPRECATION_WARNINGS
-            int32_t tids[2] = { static_cast<int32_t>(GRenderThreadId), static_cast<int32_t>(GRHIThreadId) };
+        CreateHintSession(GGameThreadId, obj_perfhint_game_session_,
+                report_actual_game_work_duration_, update_target_game_work_duration_);
+        CreateHintSession(GRenderThreadId, obj_perfhint_render_session_,
+                report_actual_render_work_duration_, update_target_render_work_duration_);
+        CreateHintSession(GRHIThreadId, obj_perfhint_rhi_session_,
+                report_actual_rhi_work_duration_, update_target_rhi_work_duration_);
 PRAGMA_ENABLE_DEPRECATION_WARNINGS
-            env->SetIntArrayRegion(array, 0, 2, tids);
-            const jlong DEFAULT_TARGET_NS = 16666666;
-
-            // Create Hint session for render threads.
-            jobject obj_hintsession = env->CallObjectMethod(
-                    obj_perfhint_service_, mid_createhintsession, array, DEFAULT_TARGET_NS);
-            if (obj_hintsession == nullptr) {
-                UE_LOG(LogAndroidPerformance, Log, TEXT("Failed to create a perf hint session."));
-            } else {
-                obj_perfhint_render_session_ = env->NewGlobalRef(obj_hintsession);
-                preferred_update_rate_ =
-                        env->CallLongMethod(obj_perfhint_service_, mid_preferedupdaterate);
-
-                // Retrieve mid of Session APIs.
-                jclass cls_perfhint_session = env->GetObjectClass(obj_perfhint_render_session_);
-                report_actual_render_work_duration_ = env->GetMethodID(
-                        cls_perfhint_session, "reportActualWorkDuration", "(J)V");
-                update_target_render_work_duration_ = env->GetMethodID(
-                        cls_perfhint_session, "updateTargetWorkDuration", "(J)V");
-            }
-
-            // Free local references
-            env->DeleteLocalRef(obj_hintsession);
-            env->DeleteLocalRef(array);
-        }
 
         // Free local references
         env->DeleteLocalRef(cls_perfhint_service);
@@ -447,67 +445,63 @@ PRAGMA_ENABLE_DEPRECATION_WARNINGS
     }
 #endif
 
-    if (report_actual_game_work_duration_ == 0 || update_target_game_work_duration_ == 0) {
-        // The API is not supported in the platform version.
-        return false;
-    }if (report_actual_render_work_duration_ == 0 || update_target_render_work_duration_ == 0) {
-        // The API is not supported in the platform version.
+    if (report_actual_game_work_duration_ == 0 || update_target_game_work_duration_ == 0 || 
+        report_actual_render_work_duration_ == 0 || update_target_render_work_duration_ == 0 ||
+        report_actual_rhi_work_duration_ == 0 || update_target_rhi_work_duration_ == 0) {
+        // The API is not supported well.
+        DestroyPerformanceHintManager();
+        UE_LOG(LogAndroidPerformance, Log, TEXT("Performance Hint Manager Initialization Failed."));
         return false;
     }
     return true;
 }
 
+void ADPFManager::DestroyPerformanceHintManager() {
+#if PLATFORM_ANDROID
+    prev_max_fps = -1.0f;
+    if (obj_perfhint_service_) {
+        if (JNIEnv* env = FAndroidApplication::GetJavaEnv()) {
+            if (obj_perfhint_game_session_) {
+                env->DeleteGlobalRef(obj_perfhint_game_session_);
+                obj_perfhint_game_session_ = nullptr;
+            }
+            if (obj_perfhint_render_session_) {
+                env->DeleteGlobalRef(obj_perfhint_render_session_);
+                obj_perfhint_render_session_ = nullptr;
+            }
+            if (obj_perfhint_rhi_session_) {
+                env->DeleteGlobalRef(obj_perfhint_rhi_session_);
+                obj_perfhint_rhi_session_ = nullptr;
+            }
+            env->DeleteGlobalRef(obj_perfhint_service_);
+            obj_perfhint_service_ = nullptr;
+        }
+    }
+#endif
+}
+
 // Indicates the start and end of the performance intensive task.
 // The methods call performance hint API to tell the performance
 // hint to the system.
-void ADPFManager::UpdatePerfHintGameSession(jlong duration_ns, jlong target_duration_ns, bool update_target_duration) {
-    if (obj_perfhint_game_session_) {
-        if(duration_ns > target_duration_ns) {
-            UE_LOG(LogAndroidPerformance, Log, TEXT("Game threads will be boosted, duration_ns %lld, target_duration_ns %lld"),
-                    duration_ns, target_duration_ns);
-        }
-
+void ADPFManager::UpdatePerfHintSession(jlong duration_ns, jlong target_duration_ns, bool update_target_duration,
+        jobject obj_perfhint_session_, jmethodID report_actual_work_duration, jmethodID update_target_work_duration) {
 #if PLATFORM_ANDROID
+    if (obj_perfhint_session_) {
         // Report and update the target work duration using JNI calls.
         if (JNIEnv* env = FAndroidApplication::GetJavaEnv()) {
-            env->CallVoidMethod(obj_perfhint_game_session_, report_actual_game_work_duration_,
+            env->CallVoidMethod(obj_perfhint_session_, report_actual_work_duration,
                                 duration_ns);
             if(update_target_duration) {
-                env->CallVoidMethod(obj_perfhint_game_session_, update_target_game_work_duration_,
+                env->CallVoidMethod(obj_perfhint_session_, update_target_work_duration,
                                     target_duration_ns);
             }
         }
-#endif
     }
-}
-
-void ADPFManager::UpdatePerfHintRenderSession(jlong duration_ns, jlong target_duration_ns, bool update_target_duration) {
-    if (obj_perfhint_render_session_) {
-        if(duration_ns > target_duration_ns) {
-            UE_LOG(LogAndroidPerformance, Log, TEXT("Render threads will be boosted, duration_ns %lld, target_duration_ns %lld"),
-                    duration_ns, target_duration_ns);
-        }
-
-#if PLATFORM_ANDROID
-        // Report and update the target work duration using JNI calls.
-        if (JNIEnv* env = FAndroidApplication::GetJavaEnv()) {
-            env->CallVoidMethod(obj_perfhint_render_session_, report_actual_render_work_duration_,
-                                duration_ns);
-            if(update_target_duration) {
-                env->CallVoidMethod(obj_perfhint_render_session_, update_target_render_work_duration_,
-                                    target_duration_ns);
-            }
-        }
 #endif
-    }
 }
 
 jlong ADPFManager::fpsToNanosec(const float maxFPS) {
     return static_cast<jlong>(1000000000.0f / maxFPS);
-}
-
-jlong ADPFManager::findLongestNanosec(const uint32_t a, const uint32_t b) {
-    return static_cast<jlong>(std::max(a, b) * 1000);
 }
 
 void ADPFManager::saveQualityLevel(const int32_t warning_level) {
