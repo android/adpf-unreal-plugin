@@ -35,7 +35,7 @@ void nativeUnregisterThermalStatusListener(JNIEnv* env, jclass cls);
  * ADPFManager class anages the ADPF APIs.
  */
 class ADPFManager {
- public:
+public:
     // Singleton function.
     static ADPFManager& getInstance() {
         static ADPFManager instance;
@@ -62,7 +62,7 @@ class ADPFManager {
     // callbacks from C API.
     AThermalManager* GetThermalManager() { return thermal_manager_; }
 
- private:
+private:
     inline jlong fpsToNanosec(const float maxFPS);
     void saveQualityLevel(const int32_t warning_level);
     void saveQualityLevel(const float head_room);
@@ -80,6 +80,7 @@ class ADPFManager {
     bool InitializePowerManager();
     float UpdateThermalStatusHeadRoom();
     bool InitializePerformanceHintManager();
+    void DestroyPerformanceHintManager();
 
     // Get current thermal status and headroom.
     int32_t GetThermalStatus() { return thermal_status_; }
@@ -93,6 +94,7 @@ class ADPFManager {
 
     AThermalManager* thermal_manager_;
     bool initialized_performance_hint_manager;
+    bool support_performance_hint_manager;
     int32_t thermal_status_; // enum for AThermalStatus
     float thermal_headroom_; // 0.0f ~ 1.0f, can be over 1.0f but it means THERMAL_STATUS_SEVERE 
     float last_clock_;
