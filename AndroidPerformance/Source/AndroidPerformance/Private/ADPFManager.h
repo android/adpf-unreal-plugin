@@ -19,17 +19,11 @@
 
 #include <android/log.h>
 #include <android/thermal.h>
+#include <android/performance_hint.h>
 #include <jni.h>
 #include <android_native_app_glue.h>
 
 #include "Scalability.h"
-
-// Forward declarations of functions that need to be in C decl.
-extern "C" {
-void nativeThermalStatusChanged(JNIEnv* env, jclass cls, int32_t thermalState);
-void nativeRegisterThermalStatusListener(JNIEnv* env, jclass cls);
-void nativeUnregisterThermalStatusListener(JNIEnv* env, jclass cls);
-}
 
 /*
  * ADPFManager class anages the ADPF APIs.
@@ -47,16 +41,12 @@ public:
     ADPFManager(ADPFManager const&) = delete;
     void operator=(ADPFManager const&) = delete;
 
-    bool registerListener();
-    bool unregisterListener();
+    bool initialize();
+    void destroy();
 
     // Invoke the method periodically (once a frame) to monitor
     // the device's thermal throttling status.
     void Monitor();
-
-    // Method to set thermal status. Need to be public since the method
-    // is called from C native listener.
-    void SetThermalStatus(const int32_t i);
 
     // Method to retrieve thermal manager. The API is used to register/unregister
     // callbacks from C API.
@@ -64,7 +54,6 @@ public:
 
 private:
     inline jlong fpsToNanosec(const float maxFPS);
-    void saveQualityLevel(const int32_t warning_level);
     void saveQualityLevel(const float head_room);
 
     // Update thermal headroom every 15 seconds.
@@ -83,35 +72,23 @@ private:
     void DestroyPerformanceHintManager();
 
     // Get current thermal status and headroom.
-    int32_t GetThermalStatus() { return thermal_status_; }
     float GetThermalHeadroom() { return thermal_headroom_; }
 
     // Indicates the start and end of the performance intensive task.
     // The methods call performance hint API to tell the performance
     // hint to the system.
     void UpdatePerfHintSession(jlong duration_ns, jlong target_duration_ns, bool update_target_duration,
-            jobject obj_perfhint_session_, jmethodID report_actual_work_duration, jmethodID update_target_work_duration);
+            APerformanceHintSession* obj_perfhint_session_);
 
     AThermalManager* thermal_manager_;
     bool initialized_performance_hint_manager;
     bool support_performance_hint_manager;
-    int32_t thermal_status_; // enum for AThermalStatus
-    float thermal_headroom_; // 0.0f ~ 1.0f, can be over 1.0f but it means THERMAL_STATUS_SEVERE 
+    float thermal_headroom_;
     float last_clock_;
-    jobject obj_power_service_;
-    jmethodID get_thermal_headroom_;
 
-    jobject obj_perfhint_service_;
-    jobject obj_perfhint_game_session_;
-    jobject obj_perfhint_render_session_;
-    jobject obj_perfhint_rhi_session_;
-    jmethodID report_actual_game_work_duration_;
-    jmethodID report_actual_render_work_duration_;
-    jmethodID report_actual_rhi_work_duration_;
-    jmethodID update_target_game_work_duration_;
-    jmethodID update_target_render_work_duration_;
-    jmethodID update_target_rhi_work_duration_;
-    jlong preferred_update_rate_;
+    APerformanceHintSession* obj_perfhint_game_session_;
+    APerformanceHintSession* obj_perfhint_render_session_;
+    APerformanceHintSession* obj_perfhint_rhi_session_;
 
     static const int32_t max_quality_count = 4;
     Scalability::FQualityLevels quality_levels[max_quality_count];
