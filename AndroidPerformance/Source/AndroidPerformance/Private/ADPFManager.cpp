@@ -48,22 +48,8 @@ static TAutoConsoleVariable<int32> CVarAndroidPerformanceChangeQualites(
     1,
     TEXT("Choose how the thermal status adjusts the game's fidelity level.\n")
     TEXT(" 0: The system does not adjust any settings\n")
-    TEXT(" 1: Settings are adjusted according to the thermal headroom\n")
-    TEXT(" 2: Settings are adjusted according to the thermal listener"),
+    TEXT(" 1: Settings are adjusted according to the thermal headroom\n"),
     ECVF_RenderThreadSafe);
-
-// Native callback for thermal status change listener.
-// The function is called from Activity implementation in Java.
-void nativeThermalStatusChanged(JNIEnv *env, jclass cls, jint thermalState) {
-    UE_LOG(LogAndroidPerformance, Log, TEXT("Thermal Status updated to:%d"), thermalState);
-    ADPFManager::getInstance().SetThermalStatus(thermalState);
-}
-
-// Native API to register/unregiser thethermal status change listener.
-// The function is called from Activity implementation in Java.
-void thermal_callback(void *data, AThermalStatus status) {
-    ADPFManager::getInstance().SetThermalStatus(status);
-}
 
 float Clock() {
     static struct timespec _base;
@@ -85,7 +71,6 @@ ADPFManager::ADPFManager()
         : thermal_manager_(nullptr),
             initialized_performance_hint_manager(false),
             support_performance_hint_manager(true),
-            thermal_status_(0),
             thermal_headroom_(0.f),
             obj_power_service_(nullptr),
             get_thermal_headroom_(0),
@@ -144,8 +129,27 @@ ADPFManager::ADPFManager()
 }
 
 ADPFManager::~ADPFManager() {
+    destroy();
+}
+
+bool ADPFManager::initialize() {
 #if PLATFORM_ANDROID
-    // Remove global reference.
+    // Initialize PowerManager reference.
+    if(InitializePowerManager()) {
+        // The device might not support thermal APIs, it will not initialized.
+        UE_LOG(LogAndroidPerformance, Log, TEXT("ADPFManager is initialized, the ADPF plugin will work in this device."));
+        return true;
+    }
+#endif
+
+    // The device might not support thermal APIs, it will not initialized.
+    UE_LOG(LogAndroidPerformance, Log, TEXT("ADPFManager is not initialized, the ADPF plugin will not work in this device."));
+    return false;
+}
+
+void ADPFManager::destroy() {
+#if PLATFORM_ANDROID
+    UE_LOG(LogAndroidPerformance, Log, TEXT("Destroying ADPFManager."));
     if (JNIEnv* env = FAndroidApplication::GetJavaEnv()) {
         DestroyPerformanceHintManager();
         if (obj_power_service_ != nullptr) {
@@ -153,23 +157,6 @@ ADPFManager::~ADPFManager() {
         }
     }
 #endif
-}
-
-bool ADPFManager::registerListener() {
-#if PLATFORM_ANDROID
-    // Initialize PowerManager reference.
-    if(InitializePowerManager()) {
-        // The device might not support thermal APIs, it will not initialized.
-        return true;
-    }
-#endif
-
-    // The device might not support thermal APIs, it will not initialized.
-    return false;
-}
-
-bool ADPFManager::unregisterListener() {
-    return true;
 }
 
 // Invoke the method periodically (once a frame) to monitor
@@ -200,7 +187,7 @@ void ADPFManager::Monitor() {
         last_clock_ = current_clock;
 
         // for debug
-        UE_LOG(LogAndroidPerformance, Log, TEXT("Headroom %.3f %d FPS %.2f temp %.2f"), thermal_headroom_, thermal_status_,
+        UE_LOG(LogAndroidPerformance, Log, TEXT("Headroom %.3f FPS %.2f temp %.2f"), thermal_headroom_,
                 fps_total / (float)fps_count, FAndroidMisc::GetDeviceTemperatureLevel());
         fps_total = 0.0f;
         fps_count = 0;
@@ -284,10 +271,6 @@ void ADPFManager::Monitor() {
         }
     }
 #endif
-}
-
-void ADPFManager::SetThermalStatus(int32_t i){
-    thermal_status_ = i;
 }
 
 // Initialize JNI calls for the powermanager.
@@ -376,7 +359,7 @@ bool ADPFManager::InitializePerformanceHintManager() {
                 env->ExceptionDescribe();
                 env->ExceptionClear();
             }
-            UE_LOG(LogAndroidPerformance, Log, TEXT("Performance Hint Manager is not supported."));
+            UE_LOG(LogAndroidPerformance, Log, TEXT("Fail to get PERFORMANCE_HINT_SERVICE field."));
             return false;
         }
         jobject str_svc = env->GetStaticObjectField(context, fid);
@@ -449,8 +432,8 @@ PRAGMA_ENABLE_DEPRECATION_WARNINGS
         report_actual_render_work_duration_ == 0 || update_target_render_work_duration_ == 0 ||
         report_actual_rhi_work_duration_ == 0 || update_target_rhi_work_duration_ == 0) {
         // The API is not supported well.
+        UE_LOG(LogAndroidPerformance, Log, TEXT("Creating performance hint session failed, the ADPF performance hint APIs will not work in this device."));
         DestroyPerformanceHintManager();
-        UE_LOG(LogAndroidPerformance, Log, TEXT("Performance Hint Manager Initialization Failed."));
         return false;
     }
     return true;
@@ -489,6 +472,8 @@ void ADPFManager::UpdatePerfHintSession(jlong duration_ns, jlong target_duration
     if (obj_perfhint_session_) {
         // Report and update the target work duration using JNI calls.
         if (JNIEnv* env = FAndroidApplication::GetJavaEnv()) {
+            // UE_LOG(LogAndroidPerformance, Log, TEXT("Update performance hint session duration %lld ns, update target duration %s and %lld ns"),
+            //         duration_ns, update_target_duration ? TEXT("true") : TEXT("false"), target_duration_ns);
             env->CallVoidMethod(obj_perfhint_session_, report_actual_work_duration,
                                 duration_ns);
             if(update_target_duration) {
@@ -502,12 +487,6 @@ void ADPFManager::UpdatePerfHintSession(jlong duration_ns, jlong target_duration
 
 jlong ADPFManager::fpsToNanosec(const float maxFPS) {
     return static_cast<jlong>(1000000000.0f / maxFPS);
-}
-
-void ADPFManager::saveQualityLevel(const int32_t warning_level) {
-    if(warning_level >= 0 && warning_level < max_quality_count) {
-        target_quality_level = warning_level;
-    }
 }
 
 void ADPFManager::saveQualityLevel(const float head_room) {

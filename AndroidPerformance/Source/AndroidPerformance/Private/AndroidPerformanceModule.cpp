@@ -30,7 +30,7 @@ void FAndroidPerformanceModule::StartupModule()
 #if PLATFORM_ANDROID
     UE_LOG(LogAndroidPerformance, Log, TEXT("Android Performance Module Started"));
 
-    bool isInitialized = ADPFManager::getInstance().registerListener();
+    bool isInitialized = ADPFManager::getInstance().initialize();
 
     // registration tick
     if(isInitialized)
@@ -52,7 +52,7 @@ void FAndroidPerformanceModule::ShutdownModule()
     // unregistration tick
     FWorldDelegates::OnWorldTickStart.RemoveAll(this);
 
-    ADPFManager::getInstance().unregisterListener();
+    ADPFManager::getInstance().destroy();
 #endif
 }
 
@@ -64,3 +64,4 @@ void FAndroidPerformanceModule::Tick(UWorld* world, ELevelTick tick_type, float 
 }
 
 #undef LOGTEXT_NAMESPACE
+ 
