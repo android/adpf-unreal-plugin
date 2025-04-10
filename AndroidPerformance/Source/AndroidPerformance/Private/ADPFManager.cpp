@@ -48,40 +48,8 @@ static TAutoConsoleVariable<int32> CVarAndroidPerformanceChangeQualites(
     1,
     TEXT("Choose how the thermal status adjusts the game's fidelity level.\n")
     TEXT(" 0: The system does not adjust any settings\n")
-    TEXT(" 1: Settings are adjusted according to the thermal headroom\n")
-    TEXT(" 2: Settings are adjusted according to the thermal listener"),
+    TEXT(" 1: Settings are adjusted according to the thermal headroom\n"),
     ECVF_RenderThreadSafe);
-
-// Native callback for thermal status change listener.
-// The function is called from Activity implementation in Java.
-void nativeThermalStatusChanged(JNIEnv *env, jclass cls, jint thermalState) {
-    UE_LOG(LogAndroidPerformance, Log, TEXT("Thermal Status updated to:%d"), thermalState);
-    ADPFManager::getInstance().SetThermalStatus(thermalState);
-}
-
-// Native API to register/unregiser thethermal status change listener.
-// The function is called from Activity implementation in Java.
-void thermal_callback(void *data, AThermalStatus status) {
-    ADPFManager::getInstance().SetThermalStatus(status);
-}
-
-void nativeRegisterThermalStatusListener(JNIEnv *env, jclass cls) {
-    auto manager = ADPFManager::getInstance().GetThermalManager();
-    if (manager != nullptr) {
-        auto ret = AThermal_registerThermalStatusListener(manager, thermal_callback,
-                                                          nullptr);
-        UE_LOG(LogAndroidPerformance, Log, TEXT("Thermal Status callback registerred:%d"), ret);
-    }
-}
-
-void nativeUnregisterThermalStatusListener(JNIEnv *env, jclass cls) {
-    auto manager = ADPFManager::getInstance().GetThermalManager();
-    if (manager != nullptr) {
-        auto ret = AThermal_unregisterThermalStatusListener(
-                manager, thermal_callback, nullptr);
-        UE_LOG(LogAndroidPerformance, Log, TEXT("Thermal Status callback unregisterred:%d"), ret);
-    }
-}
 
 float Clock() {
     static struct timespec _base;
@@ -103,21 +71,10 @@ ADPFManager::ADPFManager()
         : thermal_manager_(nullptr),
             initialized_performance_hint_manager(false),
             support_performance_hint_manager(true),
-            thermal_status_(0),
             thermal_headroom_(0.f),
-            obj_power_service_(nullptr),
-            get_thermal_headroom_(0),
-            obj_perfhint_service_(nullptr),
             obj_perfhint_game_session_(nullptr),
             obj_perfhint_render_session_(nullptr),
             obj_perfhint_rhi_session_(nullptr),
-            report_actual_game_work_duration_(0),
-            report_actual_render_work_duration_(0),
-            report_actual_rhi_work_duration_(0),
-            update_target_game_work_duration_(0),
-            update_target_render_work_duration_(0),
-            update_target_rhi_work_duration_(0),
-            preferred_update_rate_(0),
             current_quality_level(max_quality_count - 1),
             target_quality_level(max_quality_count - 1),
             prev_max_fps(-1.0f),
@@ -162,65 +119,58 @@ ADPFManager::ADPFManager()
 }
 
 ADPFManager::~ADPFManager() {
-#if PLATFORM_ANDROID
-    // Remove global reference.
-    if (JNIEnv* env = FAndroidApplication::GetJavaEnv()) {
-        DestroyPerformanceHintManager();
-        if (obj_power_service_ != nullptr) {
-            env->DeleteGlobalRef(obj_power_service_);
-        }
-        if (thermal_manager_ != nullptr) {
-            AThermal_releaseManager(thermal_manager_);
-        }
-    }
-#endif
+    destroy();
 }
 
-bool ADPFManager::registerListener() {
-#if PLATFORM_ANDROID
+bool ADPFManager::initialize() {
+#if __ANDROID_API__ < 31
+    #error "Android API level is less than 31, the thermal API is not supported. Recommend to increase 'NDK API Level' to 'android-33' or 'use-jni' branch in github."
+#endif
+#if __ANDROID_API__ < 33
+    #error "Android API level is less than 33, the performance hint APIs are not supported. Recommend to increase 'NDK API Level' to 'android-33' or 'use-jni' branch in github."
+#endif
+
+#if defined(PLATFORM_ANDROID) && __ANDROID_API__ >= 31
     // Initialize PowerManager reference.
-    if(android_get_device_api_level() < 31 || InitializePowerManager() == false) {
+    if(android_get_device_api_level() < 31) {
         // The device might not support thermal APIs, it will not initialized.
+        UE_LOG(LogAndroidPerformance, Log, TEXT("Device API level is less than 31, the ADPF plugin will not work in this device."));
+        return false;
+    }
+    else if(InitializePowerManager() == false) {
+        // The device might not support thermal APIs, it will not initialized.
+        UE_LOG(LogAndroidPerformance, Log, TEXT("Initialize PowerManager failed, the ADPF plugin will not work in this device."));
         return false;
     }
 
-    // Retrieve power manager and register thermal state change callback.
-    if (android_get_device_api_level() >= 30) {
-        // Use NDK Thermal API.
-        auto manager = GetThermalManager();
-        if (manager != nullptr) {
-            auto ret = AThermal_registerThermalStatusListener(manager, thermal_callback,
-                                                            nullptr);
-            UE_LOG(LogAndroidPerformance, Log, TEXT("Thermal Status callback registerred:%d"), ret);
-            return true;
-        }
+    // Initialize PerformanceHintManager reference.
+    auto manager = GetThermalManager();
+    if (manager != nullptr) {
+        UE_LOG(LogAndroidPerformance, Log, TEXT("ADPFManager is initialized, the ADPF plugin will work in this device."));
+        return true;
     }
 #endif
 
     // The device might not support thermal APIs, it will not initialized.
+    UE_LOG(LogAndroidPerformance, Log, TEXT("ADPFManager is not initialized, the ADPF plugin will not work in this device."));
     return false;
 }
 
-bool ADPFManager::unregisterListener() {
-#if PLATFORM_ANDROID
-    // Remove the thermal state change listener on pause.
-    if (android_get_device_api_level() >= 30) {
-        // Use NDK Thermal API.
-        auto manager = GetThermalManager();
-        if (manager != nullptr) {
-            auto ret = AThermal_unregisterThermalStatusListener(
-                    manager, thermal_callback, nullptr);
-            UE_LOG(LogAndroidPerformance, Log, TEXT("Thermal Status callback unregisterred:%d"), ret);
-        }
+void ADPFManager::destroy() {
+#if defined(PLATFORM_ANDROID) && __ANDROID_API__ >= 33
+    // Destroy the performance hint sessions and release the thermal manager.
+    UE_LOG(LogAndroidPerformance, Log, TEXT("Destroying ADPFManager."));
+    DestroyPerformanceHintManager();
+    if (thermal_manager_ != nullptr) {
+        AThermal_releaseManager(thermal_manager_);
     }
 #endif
-    return true;
 }
 
 // Invoke the method periodically (once a frame) to monitor
 // the device's thermal throttling status.
 void ADPFManager::Monitor() {
-#if PLATFORM_ANDROID
+#if defined(PLATFORM_ANDROID) && __ANDROID_API__ >= 31
     if (CVarAndroidPerformanceEnabled.GetValueOnAnyThread() == 0) {
         // check performance hint session is created, and delete it.
         if(initialized_performance_hint_manager) {
@@ -245,7 +195,7 @@ void ADPFManager::Monitor() {
         last_clock_ = current_clock;
 
         // for debug
-        UE_LOG(LogAndroidPerformance, Log, TEXT("Headroom %.3f %d FPS %.2f temp %.2f"), thermal_headroom_, thermal_status_,
+        UE_LOG(LogAndroidPerformance, Log, TEXT("Headroom %.3f FPS %.2f temp %.2f"), thermal_headroom_,
                 fps_total / (float)fps_count, FAndroidMisc::GetDeviceTemperatureLevel());
         fps_total = 0.0f;
         fps_count = 0;
@@ -254,9 +204,6 @@ void ADPFManager::Monitor() {
         if (quality_mode != 0) {
             if (quality_mode == 1) {
                 saveQualityLevel(thermal_headroom_);
-            }
-            else {
-                saveQualityLevel(max_quality_count - thermal_status_ - 1);
             }
 
             // TODO Change the quality and FPS settings to match the game's status.
@@ -311,15 +258,15 @@ void ADPFManager::Monitor() {
             // Update the performance hint sessions with the actual thread time and target duration.
             if(GGameThreadTime > 0) {
                 UpdatePerfHintSession(static_cast<jlong>(GGameThreadTime * 1000), target_duration_nano, update_target_duration,
-                        obj_perfhint_game_session_, report_actual_game_work_duration_, update_target_game_work_duration_);
+                        obj_perfhint_game_session_);
             }
             else {
                 prev_max_fps = -1.0f;
             }
             UpdatePerfHintSession(static_cast<jlong>(GRenderThreadTime * 1000), target_duration_nano, update_target_duration,
-                    obj_perfhint_render_session_, report_actual_render_work_duration_, update_target_render_work_duration_);
+                    obj_perfhint_render_session_);
             UpdatePerfHintSession(static_cast<jlong>(GRHIThreadTime * 1000), target_duration_nano, update_target_duration,
-                    obj_perfhint_rhi_session_, report_actual_rhi_work_duration_, update_target_rhi_work_duration_);
+                    obj_perfhint_rhi_session_);
         }
     }
     else {
@@ -334,61 +281,16 @@ void ADPFManager::Monitor() {
 #endif
 }
 
-void ADPFManager::SetThermalStatus(int32_t i){
-    thermal_status_ = i;
-}
-
 // Initialize JNI calls for the powermanager.
 bool ADPFManager::InitializePowerManager() {
-#if PLATFORM_ANDROID
+#if defined(PLATFORM_ANDROID) && __ANDROID_API__ >= 31
     if (android_get_device_api_level() >= 31) {
-        // Initialize the powermanager using NDK API.
+        // Use NDK API to retrieve thermal headroom.
         thermal_manager_ = AThermal_acquireManager();
     } else {
         return false;
     }
-
-    if (JNIEnv* env = FAndroidApplication::GetJavaEnv()) {
-        // Retrieve class information
-        jclass context = env->FindClass("android/content/Context");
-
-        // Get the value of a constant
-        jfieldID fid =
-                env->GetStaticFieldID(context, "POWER_SERVICE", "Ljava/lang/String;");
-        jobject str_svc = env->GetStaticObjectField(context, fid);
-
-        // Get the method 'getSystemService' and call it
-        extern struct android_app* GNativeAndroidApp;
-        jmethodID mid_getss = env->GetMethodID(
-                context, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;");
-        jobject obj_power_service = env->CallObjectMethod(
-                GNativeAndroidApp->activity->clazz, mid_getss, str_svc);
-
-        // Add global reference to the power service object.
-        obj_power_service_ = env->NewGlobalRef(obj_power_service);
-
-        jclass cls_power_service = env->GetObjectClass(obj_power_service_);
-        get_thermal_headroom_ =
-                env->GetMethodID(cls_power_service, "getThermalHeadroom", "(I)F");
-
-        // Free references
-        env->DeleteLocalRef(cls_power_service);
-        env->DeleteLocalRef(obj_power_service);
-        env->DeleteLocalRef(str_svc);
-        env->DeleteLocalRef(context);
-
-        // Remove exception
-        if(env->ExceptionCheck()) {
-            env->ExceptionDescribe();
-            env->ExceptionClear();
-        }
-    }
 #endif
-
-    if (get_thermal_headroom_ == 0) {
-        // The API is not supported in the platform version.
-        return false;
-    }
 
     if(FMath::IsNaN(UpdateThermalStatusHeadRoom())) {
         // If thermal headroom is NaN, this device is not support thermal API.
@@ -400,23 +302,12 @@ bool ADPFManager::InitializePowerManager() {
 
 // Retrieve current thermal headroom using JNI call.
 float ADPFManager::UpdateThermalStatusHeadRoom() {
-#if __ANDROID_API__ >= 31
-    // Use NDK API to retrieve thermal status headroom.
-    thermal_headroom_ = AThermal_getThermalHeadroom(
-            thermal_manager_, kThermalHeadroomForecastSeconds);
-    return thermal_headroom_;
-#endif
-
-    if (get_thermal_headroom_ == 0) {
-        return 0.f;
-    }
-
-#if PLATFORM_ANDROID
-    // Get thermal headroom!
-    if (JNIEnv* env = FAndroidApplication::GetJavaEnv()) {
-        thermal_headroom_ =
-                env->CallFloatMethod(obj_power_service_, get_thermal_headroom_,
-                                                        kThermalHeadroomForecastSeconds);
+#if defined(PLATFORM_ANDROID) && __ANDROID_API__ >= 31
+    // Get the current thermal headroom.
+    if(thermal_manager_) {
+        thermal_headroom_ = AThermal_getThermalHeadroom(
+                thermal_manager_, kThermalHeadroomForecastSeconds);
+        return thermal_headroom_;
     }
 #endif
     return thermal_headroom_;
@@ -424,120 +315,62 @@ float ADPFManager::UpdateThermalStatusHeadRoom() {
 
 // Initialize JNI calls for the PowerHintManager.
 bool ADPFManager::InitializePerformanceHintManager() {
-#if PLATFORM_ANDROID
-    if (JNIEnv* env = FAndroidApplication::GetJavaEnv()) {
-        // Retrieve class information
-        jclass context = env->FindClass("android/content/Context");
-
-        // Get the value of a constant
-        jfieldID fid = env->GetStaticFieldID(context, "PERFORMANCE_HINT_SERVICE",
-                                             "Ljava/lang/String;");
-        if(!fid) {
-            // Remove exception
-            if(env->ExceptionCheck()) {
-                env->ExceptionDescribe();
-                env->ExceptionClear();
-            }
-            UE_LOG(LogAndroidPerformance, Log, TEXT("Performance Hint Manager is not supported."));
-            return false;
-        }
-        jobject str_svc = env->GetStaticObjectField(context, fid);
-
-        // Get the method 'getSystemService' and call it
-        extern struct android_app* GNativeAndroidApp;
-        jmethodID mid_getss = env->GetMethodID(
-                context, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;");
-        jobject obj_perfhint_service = env->CallObjectMethod(
-                GNativeAndroidApp->activity->clazz, mid_getss, str_svc);
-
-        // Add global reference to the power service object.
-        obj_perfhint_service_ = env->NewGlobalRef(obj_perfhint_service);
-
-        // Retrieve methods IDs for the APIs.
-        jclass cls_perfhint_service = env->GetObjectClass(obj_perfhint_service_);
-        jmethodID mid_createhintsession =
-                env->GetMethodID(cls_perfhint_service, "createHintSession",
-                                 "([IJ)Landroid/os/PerformanceHintManager$Session;");
-        jmethodID mid_preferedupdaterate = env->GetMethodID(
-                cls_perfhint_service, "getPreferredUpdateRateNanos", "()J");
-        
-        const jlong DEFAULT_TARGET_NS = 16666666;
-
-        // Function to create and initialize a hint session
-        auto CreateHintSession = [&](int32_t threadId, jobject& sessionGlobalRef, jmethodID& reportMethod, jmethodID& updateMethod) {
-            jintArray array = env->NewIntArray(1);
-            env->SetIntArrayRegion(array, 0, 1, &threadId); 
-
-            jobject obj_hintsession = env->CallObjectMethod(obj_perfhint_service_, mid_createhintsession, array, DEFAULT_TARGET_NS);
-            if (obj_hintsession) {
-                sessionGlobalRef = env->NewGlobalRef(obj_hintsession);
-                preferred_update_rate_ = env->CallLongMethod(obj_perfhint_service_, mid_preferedupdaterate);
-
-                jclass cls_perfhint_session = env->GetObjectClass(obj_hintsession);
-                reportMethod = env->GetMethodID(cls_perfhint_session, "reportActualWorkDuration", "(J)V");
-                updateMethod = env->GetMethodID(cls_perfhint_session, "updateTargetWorkDuration", "(J)V");
-            } else {
-                UE_LOG(LogAndroidPerformance, Log, TEXT("Failed to create a perf hint session."));
-            }
-
-            env->DeleteLocalRef(obj_hintsession);
-            env->DeleteLocalRef(array);
-        };
-
-PRAGMA_DISABLE_DEPRECATION_WARNINGS
-        CreateHintSession(GGameThreadId, obj_perfhint_game_session_,
-                report_actual_game_work_duration_, update_target_game_work_duration_);
-        CreateHintSession(GRenderThreadId, obj_perfhint_render_session_,
-                report_actual_render_work_duration_, update_target_render_work_duration_);
-        CreateHintSession(GRHIThreadId, obj_perfhint_rhi_session_,
-                report_actual_rhi_work_duration_, update_target_rhi_work_duration_);
-PRAGMA_ENABLE_DEPRECATION_WARNINGS
-
-        // Free local references
-        env->DeleteLocalRef(cls_perfhint_service);
-        env->DeleteLocalRef(obj_perfhint_service);
-        env->DeleteLocalRef(str_svc);
-        env->DeleteLocalRef(context);
-
-        // Remove exception
-        if(env->ExceptionCheck()) {
-            env->ExceptionDescribe();
-            env->ExceptionClear();
-        }
+#if defined(PLATFORM_ANDROID) && __ANDROID_API__ >= 33
+    if (android_get_device_api_level() < 31) {
+        // The device might not support performance hint APIs, it will not initialized.
+        UE_LOG(LogAndroidPerformance, Log, TEXT("The device API level is less than 31, the ADPF performance hint APIs will not work in this device."));
+        return false;
     }
+
+    APerformanceHintManager* obj_perfhint_manager = APerformanceHint_getManager();
+    if(obj_perfhint_manager == nullptr) {
+        // The device might not support performance hint APIs, it will not initialized.
+        UE_LOG(LogAndroidPerformance, Log, TEXT("Get performance hint manager failed, the ADPF performance hint APIs will not work in this device."));
+        return false;
+    }
+
+    // Create performance hint sessions for game, render, and RHI threads.
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
+    const int32_t kGameThreadId = GGameThreadId;
+    const int32_t kRenderThreadId = GRenderThreadId;
+    const int32_t kRHIThreadId = GRHIThreadId;
+    obj_perfhint_game_session_ = APerformanceHint_createSession(obj_perfhint_manager,
+            &kGameThreadId, 1, 166666666);
+    obj_perfhint_render_session_ = APerformanceHint_createSession(obj_perfhint_manager,
+            &kRenderThreadId, 1, 166666666);
+    obj_perfhint_rhi_session_ = APerformanceHint_createSession(obj_perfhint_manager,
+            &kRHIThreadId, 1, 166666666);
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
 #endif
 
-    if (report_actual_game_work_duration_ == 0 || update_target_game_work_duration_ == 0 || 
-        report_actual_render_work_duration_ == 0 || update_target_render_work_duration_ == 0 ||
-        report_actual_rhi_work_duration_ == 0 || update_target_rhi_work_duration_ == 0) {
+    // Check if the performance hint sessions are created successfully.
+    // If not, the device might not support performance hint APIs.
+    if(obj_perfhint_game_session_ == nullptr || obj_perfhint_render_session_ == nullptr ||
+        obj_perfhint_rhi_session_ == nullptr) {
         // The API is not supported well.
+        UE_LOG(LogAndroidPerformance, Log, TEXT("Creating performance hint session failed, the ADPF performance hint APIs will not work in this device."));
         DestroyPerformanceHintManager();
-        UE_LOG(LogAndroidPerformance, Log, TEXT("Performance Hint Manager Initialization Failed."));
         return false;
     }
     return true;
 }
 
 void ADPFManager::DestroyPerformanceHintManager() {
-#if PLATFORM_ANDROID
+#if defined(PLATFORM_ANDROID) && __ANDROID_API__ >= 33
     prev_max_fps = -1.0f;
-    if (obj_perfhint_service_) {
-        if (JNIEnv* env = FAndroidApplication::GetJavaEnv()) {
-            if (obj_perfhint_game_session_) {
-                env->DeleteGlobalRef(obj_perfhint_game_session_);
-                obj_perfhint_game_session_ = nullptr;
-            }
-            if (obj_perfhint_render_session_) {
-                env->DeleteGlobalRef(obj_perfhint_render_session_);
-                obj_perfhint_render_session_ = nullptr;
-            }
-            if (obj_perfhint_rhi_session_) {
-                env->DeleteGlobalRef(obj_perfhint_rhi_session_);
-                obj_perfhint_rhi_session_ = nullptr;
-            }
-            env->DeleteGlobalRef(obj_perfhint_service_);
-            obj_perfhint_service_ = nullptr;
-        }
+
+    UE_LOG(LogAndroidPerformance, Log, TEXT("Destroying performance hint sessions."));
+    if(obj_perfhint_game_session_) {
+        APerformanceHint_closeSession(obj_perfhint_game_session_);
+        obj_perfhint_game_session_ = nullptr;
+    }
+    if(obj_perfhint_render_session_) {
+        APerformanceHint_closeSession(obj_perfhint_render_session_);
+        obj_perfhint_render_session_ = nullptr;
+    }
+    if(obj_perfhint_rhi_session_) {
+        APerformanceHint_closeSession(obj_perfhint_rhi_session_);
+        obj_perfhint_rhi_session_ = nullptr;
     }
 #endif
 }
@@ -546,17 +379,14 @@ void ADPFManager::DestroyPerformanceHintManager() {
 // The methods call performance hint API to tell the performance
 // hint to the system.
 void ADPFManager::UpdatePerfHintSession(jlong duration_ns, jlong target_duration_ns, bool update_target_duration,
-        jobject obj_perfhint_session_, jmethodID report_actual_work_duration, jmethodID update_target_work_duration) {
-#if PLATFORM_ANDROID
+        APerformanceHintSession* obj_perfhint_session_) {
+#if defined(PLATFORM_ANDROID) && __ANDROID_API__ >= 33
     if (obj_perfhint_session_) {
-        // Report and update the target work duration using JNI calls.
-        if (JNIEnv* env = FAndroidApplication::GetJavaEnv()) {
-            env->CallVoidMethod(obj_perfhint_session_, report_actual_work_duration,
-                                duration_ns);
-            if(update_target_duration) {
-                env->CallVoidMethod(obj_perfhint_session_, update_target_work_duration,
-                                    target_duration_ns);
-            }
+        // UE_LOG(LogAndroidPerformance, Log, TEXT("Update performance hint session duration %lld ns, update target duration %s and %lld ns"),
+        //         duration_ns, update_target_duration ? TEXT("true") : TEXT("false"), target_duration_ns);
+        APerformanceHint_reportActualWorkDuration(obj_perfhint_session_, duration_ns);
+        if(update_target_duration) {
+            APerformanceHint_updateTargetWorkDuration(obj_perfhint_session_, target_duration_ns);
         }
     }
 #endif
@@ -564,12 +394,6 @@ void ADPFManager::UpdatePerfHintSession(jlong duration_ns, jlong target_duration
 
 jlong ADPFManager::fpsToNanosec(const float maxFPS) {
     return static_cast<jlong>(1000000000.0f / maxFPS);
-}
-
-void ADPFManager::saveQualityLevel(const int32_t warning_level) {
-    if(warning_level >= 0 && warning_level < max_quality_count) {
-        target_quality_level = warning_level;
-    }
 }
 
 void ADPFManager::saveQualityLevel(const float head_room) {
