@@ -11,10 +11,14 @@ The plugin has two main features: thermal state and CPU performance hints. The p
 4. Find **Android Performance** and check **Enabled**. The Unreal Engine suggests restarting the project.
 5. Restart the game project, and trigger a build.
 
+If the game use 'NDK API Level' to 'android-33' or higher, use the main branch. Otherwise use 'use-jni' branch.
+
 ## Graphics quality levels
 Graphics quality is set by the Unreal Scalability `SetQualityLevels()` function, which changes view distance, anti-aliasing, shadow, post-processing, texture and effects, foliage, and shading quality levels.
 
 For more details about these graphics qualities, see the [Unreal Scalability reference](https://docs.unrealengine.com/4.27/en-US/TestingAndOptimization/PerformanceAndProfiling/Scalability/ScalabilityReference/). The Unreal plugin changes graphics quality level from 0 (lowest) to 3 (highest) based on the thermal state. Customize the graphics quality levels 0-3 based on the needs of your game environment.
+
+The game **must customize ADPF graphic quality logic** to use in-game graphic quality logic.
 
 ## License
 
